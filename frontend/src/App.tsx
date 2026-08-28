@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Container,
@@ -12,7 +12,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  CircularProgress,
   Alert,
   Snackbar,
 } from '@mui/material';
