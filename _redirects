@@ -1,0 +1,2 @@
+# Redirect API calls to the backend
+/api/* /api/404.html 404!

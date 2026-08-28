@@ -1,0 +1,51 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - DB_PATH=/app/data/scans.db
+      - OPENRAG_MODEL_PATH=/app/models
+      - DEEPSEEK_HARNESS_PLUGINS=database,web
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_BACKEND_URL=http://backend:5001
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  terraform:
+    image: hashicorp/terraform:1.9
+    volumes:
+      - ./infra:/infra
+    working_dir: /infra
+    entrypoint: ["terraform"]
+    command: ["apply", "-auto-approve"]
+    profiles: ["infra"]
+
+  ansible:
+    image: alpine:latest
+    volumes:
+      - ./ansible:/ansible
+    working_dir: /ansible
+    entrypoint: ["sh", "-c", "apk add --no-cache ansible && ansible-playbook playbook.yml"]
+    profiles: ["infra"]
+
