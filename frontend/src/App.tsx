@@ -10,7 +10,7 @@ import {
   Button,
   Chip,
   List,
-  ListItem,
+  ListItemButton,
   ListItemText,
   Alert,
   Snackbar,
@@ -199,12 +199,12 @@ function App() {
             </Typography>
             <List dense>
               {scans.map((scan) => (
-                <ListItem key={scan.id} button onClick={() => fetchScanDetail(scan.id)}>
+                <ListItemButton key={scan.id} onClick={() => fetchScanDetail(scan.id)}>
                   <ListItemText
                     primary={scan.filename}
                     secondary={new Date(scan.timestamp).toLocaleString()}
                   />
-                </ListItem>
+                </ListItemButton>
               ))}
             </List>
             {selectedScan && (

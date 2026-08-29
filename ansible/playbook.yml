@@ -38,13 +38,18 @@
       register: db_init
       changed_when: "'initialized' in db_init.stdout"
 
-    - name: Build Docker images with Terraform
-      command:
-        cmd: "terraform init && terraform apply -auto-approve"
+    - name: Initialize Terraform
+      shell:
+        cmd: "terraform init"
+        chdir: "{{ project_root }}/infra"
+
+    - name: Apply Terraform
+      shell:
+        cmd: "terraform apply -auto-approve"
         chdir: "{{ project_root }}/infra"
 
     - name: Start Docker Compose stack
-      command:
+      shell:
         cmd: "docker compose -f {{ project_root }}/docker-compose.yml up -d"
         chdir: "{{ project_root }}"
 
@@ -64,7 +69,3 @@
           Application available at: http://localhost:5173
           Backend API: http://localhost:5001
           API Documentation: http://localhost:5001/docs
-
-    - name: Print raw evidence link
-      debug:
-        msg: "Evidence logged to: {{ project_root }}/{{ EVIDENCE_FILE }}"

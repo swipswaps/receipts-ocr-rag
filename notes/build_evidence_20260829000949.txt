@@ -1,0 +1,74 @@
+=== build_repo.sh -- 20260829000949 UTC ===
+
+project_root : /home/owner/Documents/a882dd73-3df0-4da3-9c2e-292bde88873a/repo/receipts-ocr-rag
+owner_repo   : swipswaps/receipts-ocr-rag
+branch       : gh-pages
+timestamp   : 20260829000949
+evidence_file: notes/build_evidence_20260829000949.txt
+
+
+=== WRITING docker-compose.yml ===
+docker-compose.yml written
+
+=== WRITING backend/Dockerfile ===
+backend/Dockerfile written
+
+=== WRITING backend/requirements.txt ===
+backend/requirements.txt written
+
+=== WRITING backend/app.py ===
+backend/app.py written
+
+=== WRITING frontend/Dockerfile ===
+frontend/Dockerfile written
+
+=== WRITING frontend/package.json ===
+frontend/package.json written
+
+=== WRITING frontend/src/App.tsx ===
+frontend/src/App.tsx written
+
+=== WRITING frontend/src/main.tsx ===
+frontend/src/main.tsx written
+
+=== WRITING frontend/index.html ===
+frontend/index.html written
+
+=== WRITING frontend/vite.config.ts ===
+frontend/vite.config.ts written
+
+=== WRITING frontend/tsconfig.json ===
+frontend/tsconfig.json written
+
+=== WRITING frontend/tsconfig.node.json ===
+frontend/tsconfig.node.json written
+
+=== WRITING infra/main.tf ===
+infra/main.tf written
+
+=== WRITING ansible/playbook.yml ===
+ansible/playbook.yml written
+
+=== WRITING .gitignore ===
+.gitignore written
+
+=== RULE COMPLIANCE LOGGING ===
+RULE COMPLIANCE: 37 rows written and read back at 2026-08-29T00:09:49.661545+00:00
+
+=== BUILD COMPLETE ===
+Repository created at: /home/owner/Documents/a882dd73-3df0-4da3-9c2e-292bde88873a/repo/receipts-ocr-rag
+Evidence file: /home/owner/Documents/a882dd73-3df0-4da3-9c2e-292bde88873a/repo/receipts-ocr-rag/notes/build_evidence_20260829000949.txt
+
+To deploy:
+  cd /home/owner/Documents/a882dd73-3df0-4da3-9c2e-292bde88873a/repo/receipts-ocr-rag
+  docker compose up -d
+  cd infra && terraform init && terraform apply -auto-approve
+  cd ../ansible && ansible-playbook playbook.yml
+
+Access:
+  Frontend: http://localhost:5173
+  Backend API: http://localhost:5001
+  API Docs: http://localhost:5001/docs
+
+=== RAW EVIDENCE LINK (Rule #55) ===
+https://raw.githubusercontent.com/swipswaps/receipts-ocr-rag/gh-pages/notes/build_evidence_20260829000949.txt
