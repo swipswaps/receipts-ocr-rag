@@ -2,34 +2,40 @@
 DEV LOG RAG - FIND WORKING CODE AND FIX PATTERNS IN CHAT/TERMINAL LOGS
 ===============================================================================
 
-This system helps developers extract useful information from conversation
-transcripts and terminal logs. It finds working code blocks, repeated errors,
-commands that succeeded, and patterns that show how problems were fixed.
+This system is a developer-log RAG engine. It ingests chat transcripts,
+terminal sessions, receipts, and other documents. It extracts code blocks,
+error messages, commands, and success indicators, then searches for working
+fixes and recurring failure patterns with full provenance.
+
+It is designed to become the Knowledge and Evidence substrate for an
+Agentic CRM, using the architecture principles from Comp AI (evidence over
+self-reported confidence, durable tasks, sandboxing), MCP for tool
+interoperability, and LiteLLM for model routing.
 
 ===============================================================================
 HOW IT WORKS
 ===============================================================================
 
-1. Upload logs (chat transcripts, terminal sessions, any .txt .log .json)
-
+1. Upload logs (chat transcripts, terminal sessions, receipts, any .txt .log .json)
 2. The system automatically extracts:
    - Code blocks (from markdown code fences or shell commands)
    - Error messages (Python tracebacks, shell errors, generic errors)
    - Commands (lines starting with $, #, > or common command names)
    - Success indicators (whether a command or code block worked)
-
+   - Provenance metadata (timestamps, source hashes, file spans)
 3. You can then:
    - Search for working code that fixed specific errors
    - Find commands that succeeded
    - See repeated errors and how they were solved
    - Browse common patterns across all logs
+   - View the Evidence Graph (via the /rag/graph endpoint)
 
 ===============================================================================
-QUICK START
+QUICK START (DOCKER)
 ===============================================================================
 
 Start the system:
-cd /home/owner/Documents/a882dd73-3df0-4da3-9c2e-292bde88873a/repo/receipts-ocr-rag
+cd /home/owner/Documents/your-repo/receipts-ocr-rag
 docker compose up -d
 
 Open the interface:
@@ -37,16 +43,8 @@ http://localhost:3000
 
 Upload your logs using the drop zone or file picker.
 
-===============================================================================
-USEFUL SEARCHES
-===============================================================================
-
-Search for:
-"working code that fixed error" - finds code blocks that appear after errors
-"command that succeeded" - finds commands that exited cleanly
-"failed and then succeeded" - finds fix patterns
-"error repeated multiple times" - finds recurring problems
-"code block with bash" - finds bash code specifically
+Backend health check:
+curl http://localhost:5001/
 
 ===============================================================================
 WHAT THE STATS TELL YOU
@@ -58,10 +56,10 @@ Errors - number of error messages detected
 Success Rate - percentage of code blocks that appear to have worked
 
 The Patterns tab shows:
-Repeated Errors - errors that appear many times, with solution status
-Common Commands - commands used frequently, with success indicators
-Working Code - code blocks that were successful
-Error to Solutions - specific errors paired with their fixes
+- Repeated Errors - errors that appear many times, with solution status
+- Common Commands - commands used frequently, with success indicators
+- Working Code - code blocks that were successful
+- Error to Solutions - specific errors paired with their fixes
 
 ===============================================================================
 HOW TO INTERPRET THE RESULTS
@@ -76,24 +74,36 @@ Each search result shows:
 Patterns show aggregation across all logs, so you can identify trends.
 
 ===============================================================================
-WHY THIS IS USEFUL FOR DEVELOPERS
+THE EVIDENCE MODEL (NEXT PHASE)
 ===============================================================================
 
-1. Stop re-learning the same lessons - find the fix you already discovered
-2. Identify recurring problems that need better documentation or tooling
-3. Share knowledge by pointing to code snippets that actually worked
-4. Retrospectively understand what went wrong in a long debugging session
-5. Extract working commands from messy terminal histories
+We are moving from simple metadata to a full provenance model:
+
+  source -> observation -> evidence -> claim -> entity
+
+Each extracted item has:
+- A content hash (immutable, for reproducibility)
+- A source span (character offsets, page numbers, or bounding boxes)
+- A timestamp (observed_at, created_at, effective_from, effective_until)
+- A verification state (PROPOSED, EXECUTED, VERIFIED, CORROBORATED, REJECTED)
+
+The Evidence State Machine allows the system to distinguish:
+
+  PROPOSED FIX
+  EXECUTED FIX
+  VERIFIED FIX
+  FIX THAT APPEARED TO WORK
 
 ===============================================================================
 TECHNICAL DETAILS
 ===============================================================================
 
 Backend: Python FastAPI with sentence-transformers for semantic search
-Frontend: Static HTML/CSS served by nginx
-Storage: SQLite for metadata, in-memory vector store for search
+Frontend: Static HTML/CSS served by nginx (Vite build)
+Storage: SQLite for metadata, in-memory vector store (migrating to PostgreSQL + pgvector)
 Extraction: Regex patterns for code blocks, errors, commands, and success
 Ports: Backend on 5001, Frontend on 3000
+Docker: Full containerized build (docker-compose)
 
 ===============================================================================
 FILE STRUCTURE
@@ -103,7 +113,7 @@ receipts-ocr-rag/
 ├── backend/
 │   └── app.py          Main application with extraction and search logic
 ├── frontend/
-│   └── index.html      User interface
+│   └── index.html      User interface (Vite build)
 ├── data/               SQLite database and uploaded data (persistent)
 ├── models/             Cached embedding models
 ├── Dockerfile          Container build definition
@@ -129,19 +139,32 @@ Get patterns via API:
 curl http://localhost:5001/rag/patterns
 
 ===============================================================================
-EXAMPLE USE CASE
+FUTURE ARCHITECTURE (ROADMAP)
 ===============================================================================
 
-You have a terminal history from a 4-hour debugging session. You remember
-that you eventually fixed the problem with a specific command or code change,
-but you don't remember exactly what it was.
+The project is evolving into an Agentic Knowledge CRM:
 
-Upload the log. Search for "worked" or "success" or "fixed". The system will
-find the relevant sections and show you the exact code or command that worked.
+   CRM Entities  +  Knowledge Graph  +  Evidence Ledger
+                         |
+                   Unified Retrieval
+                         |
+              Hybrid: FTS + Vector + Metadata
+                         |
+                       Reranker
+                         |
+                   Agent Orchestrator
+                         |
+                       MCP Tools
+                         |
+                   LiteLLM Gateway
+                         |
+        Cloud (OpenAI/Anthropic) vs Local (Ollama/vLLM)
 
-Alternatively, look at the Patterns tab to see all commands sorted by frequency
-and success rate. The command you used most often is likely the one that
-eventually worked.
+Key principles:
+- LLM is replaceable; the evidence model is not.
+- Never trust "confidence" from a model; require deterministic evidence.
+- Sandbox has no database credentials and deny-all egress.
+- Model routing is policy-driven (task, data sensitivity, cost, latency).
 
 ===============================================================================
 LIVE DEMO
@@ -151,6 +174,8 @@ The system is deployed at:
 https://swipswaps.github.io/receipts-ocr-rag
 
 It connects to your local backend running on port 5001.
+NOTE: The live GitHub Pages site only works locally (PNA bypass).
+For public use, deploy the Docker backend to a cloud host.
 
 ===============================================================================
 END OF README
