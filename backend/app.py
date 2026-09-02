@@ -1,375 +1,196 @@
-import os
-import json
-import re
-import hashlib
-import logging
-from datetime import datetime, timedelta
+import os, json, re, logging
+from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-import aiofiles
 import sqlite3
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Receipts OCR + RAG + Agent")
+app = FastAPI(title="Dev Log RAG")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-DATA_DIR = "/app/data"
-MODEL_DIR = "/app/models"
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-# SQLite for metadata + chat history
-DB_PATH = os.path.join(DATA_DIR, "rag.db")
+DATA_DIR = "/app/data"; MODEL_DIR = "/app/models"
+os.makedirs(DATA_DIR, exist_ok=True); os.makedirs(MODEL_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "dev.db")
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS documents (
-        id INTEGER PRIMARY KEY,
-        filename TEXT,
-        text TEXT,
-        vendor TEXT,
-        date TEXT,
-        amount REAL,
-        category TEXT,
-        created_at TEXT
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS chat_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        query TEXT,
-        response TEXT,
-        timestamp TEXT
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS image_references (
-        id INTEGER PRIMARY KEY,
-        filename TEXT,
-        doc_id INTEGER,
-        image_path TEXT,
-        uploaded_at TEXT
-    )
-""")
+
+# Create tables
+conn.execute("""CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT, content TEXT, entry_type TEXT, timestamp TEXT)""")
+conn.execute("""CREATE TABLE IF NOT EXISTS code_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, language TEXT, code TEXT, worked INTEGER DEFAULT 0, FOREIGN KEY(entry_id) REFERENCES entries(id))""")
+conn.execute("""CREATE TABLE IF NOT EXISTS errors (id INTEGER PRIMARY KEY AUTOINCREMENT, error_text TEXT, error_type TEXT, count INTEGER DEFAULT 1, first_seen TEXT, last_seen TEXT, solved INTEGER DEFAULT 0, solution TEXT)""")
+conn.execute("""CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT, exit_code INTEGER, worked INTEGER DEFAULT 0, count INTEGER DEFAULT 1, last_used TEXT)""")
 conn.commit()
 
 MODEL_NAME = "all-MiniLM-L6-v2"
-logger.info(f"Loading model: {MODEL_NAME}")
 model = SentenceTransformer(MODEL_NAME, cache_folder=MODEL_DIR)
 
-documents = []  # In-memory vector store
+# Global vector store
+documents = []
 
-# --- Models ---
-class RAGQuery(BaseModel):
-    query: str
-    top_k: Optional[int] = 5
-    threshold: Optional[float] = 0.2
-    session_id: Optional[str] = None
-    filter_vendor: Optional[str] = None
-    filter_date_from: Optional[str] = None
-    filter_date_to: Optional[str] = None
-    filter_category: Optional[str] = None
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str
-    top_k: Optional[int] = 5
-
-# --- Helper functions ---
+# Helper functions
 def get_embedding(text: str) -> np.ndarray:
-    if not text or len(text.strip()) == 0:
-        return np.zeros(model.get_sentence_embedding_dimension())
+    if not text or len(text.strip()) == 0: return np.zeros(384)
     return model.encode(text, normalize_embeddings=True)
 
-def extract_metadata(text: str) -> Dict[str, Any]:
-    """Extract vendor, date, amount, category from text."""
-    metadata = {"vendor": None, "date": None, "amount": None, "category": None}
-    # Vendor detection (common patterns)
-    vendor_patterns = [
-        r'(?i)(?:from|at|vendor|store|merchant):\s*([A-Za-z0-9\s&,.]+)',
-        r'(?i)([A-Za-z0-9\s&,.]+)(?:\s+receipt|\s+invoice)',
-    ]
-    for pattern in vendor_patterns:
-        m = re.search(pattern, text[:500])
-        if m:
-            metadata["vendor"] = m.group(1).strip()
-            break
-    # Date extraction
-    date_patterns = [
-        r'(\d{4}[-/]\d{2}[-/]\d{2})',
-        r'(\d{2}[-/]\d{2}[-/]\d{4})',
-        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})',
-    ]
-    for pattern in date_patterns:
-        m = re.search(pattern, text[:1000])
-        if m:
-            metadata["date"] = m.group(1)
-            break
-    # Amount extraction
-    amount_patterns = [
-        r'(?:total|sum|amount|grand total)[:\s]*\$?(\d+\.\d{2})',
-        r'(\d+\.\d{2})\s*(?:USD|EUR|GBP|total)',
-    ]
-    for pattern in amount_patterns:
-        m = re.search(pattern, text[:1000])
-        if m:
-            metadata["amount"] = float(m.group(1))
-            break
-    return metadata
+def extract_code_blocks(text: str) -> List[Dict]:
+    blocks = []
+    for match in re.finditer(r'```(\w+)\n(.*?)```', text, re.DOTALL):
+        blocks.append({"language": match.group(1), "code": match.group(2).strip()})
+    for line in text.split('\n'):
+        m = re.match(r'^(?:\$|#|>)\s*(.+)$', line.strip())
+        if m: blocks.append({"language": "bash", "code": m.group(1).strip()})
+    return blocks
 
-def detect_query_intent(query: str) -> Dict[str, Any]:
-    """Detect if query is aggregation, filter, or semantic."""
-    intent = {"type": "semantic", "filters": {}, "aggregation": None}
-    
-    # Aggregation keywords
-    agg_keywords = ["sum", "total", "average", "avg", "count", "how many", "how much", "breakdown"]
-    for kw in agg_keywords:
-        if kw in query.lower():
-            intent["type"] = "aggregation"
-            if "sum" in query.lower() or "total" in query.lower():
-                intent["aggregation"] = "sum"
-            elif "average" in query.lower() or "avg" in query.lower():
-                intent["aggregation"] = "avg"
-            elif "count" in query.lower():
-                intent["aggregation"] = "count"
-            break
-    
-    # Date filters
-    date_patterns = [
-        (r'(?:last|past)\s+(\d+)\s+(day|week|month|year)', 'period'),
-        (r'(?:in|during)\s+(\d{4})', 'year'),
-        (r'(\d{4}[-/]\d{2}[-/]\d{2})\s+to\s+(\d{4}[-/]\d{2}[-/]\d{2})', 'range'),
+def extract_errors(text: str) -> List[Dict]:
+    errors = []
+    patterns = [
+        (r'(error|Error|ERROR):\s*(.+?)(?:\n|$)', 'generic'),
+        (r'(Traceback|Exception|SyntaxError|NameError|TypeError|KeyError|ValueError|ImportError|ModuleNotFoundError).*?(?:\n|$)', 'python'),
+        (r'(command not found|permission denied|no such file|cannot find|failed to|unable to)', 'shell'),
     ]
-    for pattern, typ in date_patterns:
-        m = re.search(pattern, query.lower())
-        if m:
-            if typ == 'period':
-                num = int(m.group(1))
-                unit = m.group(2)
-                intent["filters"]["period"] = {"num": num, "unit": unit}
-            elif typ == 'year':
-                intent["filters"]["year"] = m.group(1)
-            elif typ == 'range':
-                intent["filters"]["date_from"] = m.group(1)
-                intent["filters"]["date_to"] = m.group(2)
-            break
-    
-    # Vendor filters
-    vendor_match = re.search(r'(?:from|at|vendor|merchant)[:\s]+([A-Za-z0-9\s]+)', query, re.I)
-    if vendor_match:
-        intent["filters"]["vendor"] = vendor_match.group(1).strip()
-    
-    # Category filters
-    categories = ["food", "transport", "groceries", "utility", "shopping", "dining"]
-    for cat in categories:
-        if cat in query.lower():
-            intent["filters"]["category"] = cat
-            break
-    
-    return intent
+    for pattern, etype in patterns:
+        for match in re.finditer(pattern, text, re.DOTALL | re.MULTILINE):
+            errors.append({"text": match.group(0).strip(), "type": etype})
+    return errors
 
-# --- API Endpoints ---
+# Load existing DB entries into vector store on startup
+def load_existing_entries():
+    global documents
+    documents = []  # Reset
+    rows = conn.execute("SELECT id, filename, content FROM entries").fetchall()
+    for entry_id, filename, text in rows:
+        chunks = [text[i:i+500] for i in range(0, len(text), 300)]
+        for chunk in chunks:
+            if len(chunk.strip()) > 20:
+                documents.append({
+                    "id": entry_id,
+                    "filename": filename,
+                    "text": chunk,
+                    "embedding": get_embedding(chunk),
+                    "metadata": {
+                        "has_code": len(extract_code_blocks(chunk)) > 0,
+                        "has_errors": len(extract_errors(chunk)) > 0,
+                        "success": "success" in text.lower(),
+                        "commands": len(extract_code_blocks(chunk))
+                    }
+                })
+    logger.info(f"Loaded {len(documents)} chunks from DB into vector store.")
+
+# Call the loader right after the model is ready
+load_existing_entries()
+
+class QueryRequest(BaseModel):
+    query: str
+    top_k: Optional[int] = 10
+    threshold: Optional[float] = 0.15
+    search_type: Optional[str] = "all"
 
 @app.get("/")
 async def root():
-    return {"status": "online", "service": "Receipts OCR + RAG + Agent", "documents": len(documents)}
+    return {"status": "online", "service": "Dev Log RAG", "documents": len(documents)}
 
 @app.post("/scan")
-async def scan_document(file: UploadFile = File(...)):
+async def scan_log(file: UploadFile = File(...)):
     content = await file.read()
     filename = file.filename
-    
-    try:
-        data = json.loads(content)
-        if isinstance(data, dict) and "text" in data:
-            text = data["text"]
-        else:
-            text = str(data)
-    except:
-        text = content.decode('utf-8', errors='ignore')
-    
-    metadata = extract_metadata(text)
-    doc_id = len(documents) + 1
+    text = content.decode('utf-8', errors='ignore')
     timestamp = datetime.now().isoformat()
-    
-    # Store in SQLite for metadata
-    conn.execute(
-        "INSERT INTO documents (id, filename, text, vendor, date, amount, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (doc_id, filename, text, metadata.get("vendor"), metadata.get("date"), metadata.get("amount"), metadata.get("category"), timestamp)
-    )
+    cursor = conn.execute("INSERT INTO entries (filename, content, entry_type, timestamp) VALUES (?, ?, ?, ?)", (filename, text, "log", timestamp))
+    entry_id = cursor.lastrowid
     conn.commit()
-    
-    # Store in vector index
+
+    code_blocks = extract_code_blocks(text)
+    errors = extract_errors(text)
+    for block in code_blocks:
+        conn.execute("INSERT INTO code_blocks (entry_id, language, code, worked) VALUES (?, ?, ?, ?)", (entry_id, block["language"], block["code"], 1 if "success" in text.lower() else 0))
+    for error in errors:
+        conn.execute("INSERT INTO errors (error_text, error_type, first_seen, last_seen) VALUES (?, ?, ?, ?)", (error["text"], error["type"], timestamp, timestamp))
+    conn.commit()
+
     chunks = [text[i:i+500] for i in range(0, len(text), 300)]
-    for i, chunk in enumerate(chunks):
-        if chunk and len(chunk.strip()) > 10:
-            embedding = get_embedding(chunk)
+    for chunk in chunks:
+        if len(chunk.strip()) > 20:
             documents.append({
-                "id": doc_id,
-                "filename": filename,
-                "text": chunk,
-                "embedding": embedding,
-                "metadata": {"chunk": i, "total_chunks": len(chunks), **metadata}
+                "id": entry_id, "filename": filename, "text": chunk,
+                "embedding": get_embedding(chunk),
+                "metadata": {"has_code": len(code_blocks) > 0, "has_errors": len(errors) > 0, "success": "success" in text.lower(), "commands": len(code_blocks)}
             })
-    
-    logger.info(f"Processed {filename}: {len(chunks)} chunks")
-    return {
-        "id": doc_id,
-        "filename": filename,
-        "status": "success",
-        "chunks": len(chunks),
-        "metadata": metadata,
-        "text_preview": text[:200] + ("..." if len(text) > 200 else ""),
-        "created_at": timestamp
-    }
+    return {"status": "success", "id": entry_id, "filename": filename}
 
-@app.post("/rag/chat")
-async def chat_query(request: ChatRequest):
-    """Chat with conversation history."""
-    # Get previous chat history
-    history = conn.execute(
-        "SELECT query, response FROM chat_history WHERE session_id = ? ORDER BY id DESC LIMIT 5",
-        (request.session_id,)
-    ).fetchall()
-    
-    # Build context from history
-    context = ""
-    for q, r in reversed(history):
-        context += f"Q: {q}\nA: {r}\n"
-    
-    # Run RAG with context
-    intent = detect_query_intent(request.message)
-    results = await rag_query_internal(request.message, request.top_k, 0.2, request.session_id)
-    
-    # Store in history
-    conn.execute(
-        "INSERT INTO chat_history (session_id, query, response, timestamp) VALUES (?, ?, ?, ?)",
-        (request.session_id, request.message, json.dumps(results[:3]), datetime.now().isoformat())
-    )
-    conn.commit()
-    
-    return {
-        "response": results,
-        "context": context,
-        "session_id": request.session_id,
-        "intent": intent
-    }
-
-async def rag_query_internal(query: str, top_k: int = 5, threshold: float = 0.2, session_id: str = None):
+@app.post("/rag/query")
+async def rag_query(request: QueryRequest):
+    """Returns structured insights, not raw text dumps."""
     if not documents:
-        return []
-    
-    intent = detect_query_intent(query)
-    
-    # Aggregation path
-    if intent["type"] == "aggregation":
-        cursor = conn.cursor()
-        if intent["aggregation"] == "sum":
-            cursor.execute("SELECT SUM(amount) FROM documents WHERE amount IS NOT NULL")
-            result = cursor.fetchone()
-            return [{"type": "aggregation", "value": result[0] if result and result[0] else 0, "unit": "dollars"}]
-        elif intent["aggregation"] == "count":
-            cursor.execute("SELECT COUNT(*) FROM documents")
-            result = cursor.fetchone()
-            return [{"type": "aggregation", "value": result[0] if result else 0, "unit": "documents"}]
-        elif intent["aggregation"] == "avg":
-            cursor.execute("SELECT AVG(amount) FROM documents WHERE amount IS NOT NULL")
-            result = cursor.fetchone()
-            return [{"type": "aggregation", "value": result[0] if result and result[0] else 0, "unit": "dollars"}]
-    
-    # Filtered query
-    filters = intent["filters"]
-    cursor = conn.cursor()
-    sql = "SELECT id, filename, text, vendor, date, amount, category FROM documents"
-    conditions = []
-    if filters.get("vendor"):
-        conditions.append(f"vendor LIKE '%{filters['vendor']}%'")
-    if filters.get("category"):
-        conditions.append(f"category = '{filters['category']}'")
-    if filters.get("date_from"):
-        conditions.append(f"date >= '{filters['date_from']}'")
-    if filters.get("date_to"):
-        conditions.append(f"date <= '{filters['date_to']}'")
-    if filters.get("year"):
-        conditions.append(f"date LIKE '{filters['year']}%'")
-    if filters.get("period"):
-        days = filters["period"]["num"] * {"day": 1, "week": 7, "month": 30, "year": 365}.get(filters["period"]["unit"], 1)
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        conditions.append(f"created_at >= '{cutoff}'")
-    
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-        cursor.execute(sql)
-        filtered_docs = cursor.fetchall()
-        if filtered_docs:
-            return [{"type": "filtered", "documents": filtered_docs[:top_k]}]
-    
-    # Semantic search (default)
-    query_embedding = get_embedding(query)
+        return {"results": [], "total": 0}
+
+    query_embedding = get_embedding(request.query)
     results = []
     for doc in documents:
         if np.any(doc["embedding"]):
             score = cosine_similarity([query_embedding], [doc["embedding"]])[0][0]
-            if score > threshold:
-                results.append({
+            if score > request.threshold:
+                # Extract the *specific* code or error from the text block
+                code_blocks = extract_code_blocks(doc["text"])
+                errors = extract_errors(doc["text"])
+                
+                # Format the result as a clean object
+                formatted_result = {
                     "id": doc["id"],
                     "filename": doc["filename"],
-                    "text": doc["text"],
                     "score": float(score),
+                    "type": "solution" if code_blocks else ("error" if errors else "context"),
+                    "worked": 1 if "success" in doc["text"].lower() else 0,
+                    "content": code_blocks[0]["code"] if code_blocks else (errors[0]["text"] if errors else doc["text"][:300]),
+                    "language": code_blocks[0]["language"] if code_blocks else None,
                     "metadata": doc.get("metadata", {})
-                })
+                }
+                results.append(formatted_result)
+    
     results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:top_k]
+    return {"results": results[:request.top_k], "total": len(results)}
 
-@app.post("/rag/query")
-async def rag_query(request: RAGQuery):
-    results = await rag_query_internal(request.query, request.top_k, request.threshold, request.session_id)
-    return {
-        "results": results,
-        "query": request.query,
-        "total": len(results),
-        "session_id": request.session_id
-    }
+@app.get("/rag/patterns")
+async def get_patterns(pattern_type: str = "all", limit: int = 20):
+    patterns = {}
+    errors = conn.execute("SELECT error_type, error_text, count, solved FROM errors ORDER BY count DESC LIMIT ?", (limit,)).fetchall()
+    patterns["top_errors"] = [{"type": e[0], "text": e[1][:200], "count": e[2], "solved": bool(e[3])} for e in errors]
+    commands = conn.execute("SELECT command, count, worked FROM commands ORDER BY count DESC LIMIT ?", (limit,)).fetchall()
+    patterns["top_commands"] = [{"command": c[0][:100], "count": c[1], "worked": bool(c[2])} for c in commands]
+    code = conn.execute("SELECT language, code FROM code_blocks WHERE worked = 1 ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    patterns["working_code"] = [{"language": c[0], "code": c[1][:500]} for c in code]
+    error_solutions = []
+    for err in conn.execute("SELECT error_text, error_type FROM errors LIMIT 20").fetchall():
+        err_embedding = get_embedding(err[0])
+        best_score = 0; best_code = None
+        for cb in conn.execute("SELECT code, worked FROM code_blocks").fetchall():
+            if not cb[1]: continue
+            cb_embedding = get_embedding(cb[0][:500])
+            score = cosine_similarity([err_embedding], [cb_embedding])[0][0]
+            if score > best_score: best_score = score; best_code = cb[0]
+        if best_code and best_score > 0.5:
+            error_solutions.append({"error": err[0][:200], "solution": best_code[:500], "score": round(float(best_score), 3)})
+    patterns["error_solutions"] = error_solutions[:10]
+    return patterns
 
-@app.get("/rag/scans")
-async def list_scans():
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, filename, vendor, date, amount, category, created_at FROM documents")
-    rows = cursor.fetchall()
-    return [{"id": r[0], "filename": r[1], "vendor": r[2], "date": r[3], "amount": r[4], "category": r[5], "created_at": r[6]} for r in rows]
-
-@app.get("/rag/stats")
-async def get_stats():
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM documents")
-    total = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(DISTINCT vendor) FROM documents WHERE vendor IS NOT NULL")
-    vendors = cursor.fetchone()[0]
-    cursor.execute("SELECT SUM(amount) FROM documents WHERE amount IS NOT NULL")
-    total_spend = cursor.fetchone()[0] or 0
-    cursor.execute("SELECT category, COUNT(*) FROM documents GROUP BY category")
-    categories = {r[0]: r[1] for r in cursor.fetchall()}
-    return {
-        "total_documents": total,
-        "total_vendors": vendors,
-        "total_spend": total_spend,
-        "categories": categories
-    }
+@app.get("/rag/graph")
+async def get_graph_data(limit: int = 50):
+    nodes = []; edges = []
+    for e in conn.execute("SELECT id, error_text, count FROM errors ORDER BY count DESC LIMIT ?", (limit,)).fetchall():
+        nodes.append({"id": f"err_{e[0]}", "type": "error", "label": e[1][:50], "size": e[2]})
+        edges.append({"source": "root", "target": f"err_{e[0]}"})
+    for c in conn.execute("SELECT id, command, count FROM commands ORDER BY count DESC LIMIT ?", (limit,)).fetchall():
+        nodes.append({"id": f"cmd_{c[0]}", "type": "command", "label": c[1][:50], "size": c[2]})
+        edges.append({"source": "root", "target": f"cmd_{c[0]}"})
+    for f in conn.execute("SELECT DISTINCT filename FROM entries LIMIT 10").fetchall():
+        nodes.append({"id": f, "type": "file", "label": f, "size": 10})
+    return {"nodes": nodes, "edges": edges}
 
 if __name__ == "__main__":
     import uvicorn
