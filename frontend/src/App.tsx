@@ -1,3 +1,4 @@
+console.log("UI Version: 2.0.4 - Structured Data Fix");
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
