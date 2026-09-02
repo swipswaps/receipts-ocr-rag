@@ -1,12 +1,377 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Receipts OCR + RAG + Agent</title>
-  <script type="module" crossorigin src="/receipts-ocr-rag/assets/index-147WbJJt.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dev Log RAG</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 1200px; margin: 20px auto; padding: 20px; background: #0f0f1a; color: #e0e0e0; }
+        h1 { color: #00d4ff; }
+        .subtitle { color: #666; font-size: 14px; }
+        .status { padding: 12px 20px; border-radius: 8px; margin: 15px 0; font-weight: 600; }
+        .online { background: #0a2a1a; border: 1px solid #4caf50; color: #4caf50; }
+        .offline { background: #2a0a0a; border: 1px solid #ff6b35; color: #ff6b35; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+        .card { background: #1a1a2e; padding: 20px; border-radius: 12px; border: 1px solid #2a2a40; }
+        .card h3 { color: #ffcc00; margin-top: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stats { display: flex; gap: 15px; flex-wrap: wrap; margin: 10px 0; }
+        .stat { background: #0f0f1a; padding: 8px 16px; border-radius: 6px; font-size: 13px; }
+        .stat strong { color: #00d4ff; }
+        .file-drop { border: 2px dashed #2a2a40; padding: 30px; text-align: center; border-radius: 8px; cursor: pointer; transition: 0.3s; }
+        .file-drop.dragover { border-color: #00d4ff; background: #0a1a2a; }
+        .file-drop input { display: none; }
+        .file-drop .icon { font-size: 40px; }
+        .file-drop .hint { color: #666; font-size: 13px; }
+        .upload-item { display: flex; align-items: center; padding: 8px 12px; background: #0f0f1a; border-radius: 6px; margin: 4px 0; gap: 10px; font-size: 13px; }
+        .upload-item .name { flex: 1; word-break: break-all; }
+        .upload-item .status-badge { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
+        .status-badge.complete { background: #0a3a1a; color: #4caf50; }
+        .status-badge.processing { background: #1a2a0a; color: #ffcc00; }
+        .status-badge.failed { background: #3a0a0a; color: #ff6b35; }
+        .progress-bar { width: 80px; height: 4px; background: #2a2a40; border-radius: 2px; overflow: hidden; }
+        .progress-bar .fill { height: 100%; background: #00d4ff; transition: width 0.5s; }
+        .btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .btn-primary { background: #4a4a7a; color: white; }
+        .btn-primary:hover { background: #5a5a8a; }
+        .btn-secondary { background: #2a2a40; color: #aaa; }
+        .btn-secondary:hover { background: #3a3a50; }
+        .query-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .query-row input { flex: 1; padding: 10px 14px; background: #0f0f1a; border: 1px solid #2a2a40; border-radius: 8px; color: #e0e0e0; font-size: 14px; min-width: 200px; }
+        .query-row input:focus { outline: none; border-color: #00d4ff; }
+        .result-item { background: #0f0f1a; padding: 12px 16px; border-radius: 8px; margin: 8px 0; border-left: 3px solid #4a4a7a; }
+        .result-item .meta { display: flex; justify-content: space-between; font-size: 12px; color: #888; flex-wrap: wrap; gap: 5px; }
+        .result-item .text { font-size: 13px; color: #ccc; line-height: 1.5; white-space: pre-wrap; font-family: monospace; }
+        .result-item .score { background: #1a1a2e; padding: 2px 10px; border-radius: 12px; }
+        .badge-code { background: #1a2a3a; color: #00d4ff; padding: 2px 10px; border-radius: 12px; font-size: 11px; }
+        .badge-error { background: #3a1a1a; color: #ff6b35; padding: 2px 10px; border-radius: 12px; font-size: 11px; }
+        .badge-success { background: #0a3a1a; color: #4caf50; padding: 2px 10px; border-radius: 12px; font-size: 11px; }
+        .pattern-card { background: #0f0f1a; padding: 12px; border-radius: 6px; margin: 6px 0; border-left: 3px solid #2a2a40; }
+        .pattern-card .cmd { font-family: monospace; color: #00d4ff; font-size: 13px; }
+        .pattern-card .count { color: #888; font-size: 12px; }
+        .pattern-card .code { font-family: monospace; font-size: 12px; color: #ccc; white-space: pre-wrap; background: #0a0a15; padding: 8px; border-radius: 4px; margin-top: 4px; }
+        .scan-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #0f0f1a; border-radius: 4px; margin: 3px 0; font-size: 13px; }
+        .scan-item .badge { background: #1a1a2e; padding: 2px 10px; border-radius: 12px; font-size: 11px; color: #888; }
+        .tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+        .tabs button { padding: 6px 16px; background: #1a1a2e; border: 1px solid #2a2a40; color: #888; cursor: pointer; border-radius: 4px 4px 0 0; font-size: 12px; }
+        .tabs button.active { background: #2a2a40; color: #e0e0e0; border-bottom-color: #2a2a40; }
+        .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; background: #1a2a1a; border: 1px solid #4caf50; color: #4caf50; opacity: 0; transition: 0.5s; z-index: 100; }
+        .toast.show { opacity: 1; }
+        .toast.error { background: #2a1a1a; border-color: #ff6b35; color: #ff6b35; }
+        .suggested { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .suggested button { background: #1a1a2e; border: 1px solid #2a2a40; color: #888; padding: 4px 14px; border-radius: 12px; font-size: 12px; cursor: pointer; }
+        .suggested button:hover { border-color: #00d4ff; color: #00d4ff; }
+        .empty-state { text-align: center; color: #555; padding: 20px; }
+    </style>
 </head>
 <body>
-  <div id="root"></div>
+
+    <h1>Dev Log RAG</h1>
+    <p class="subtitle">Find working code, repeated errors, and fix patterns in chat/terminal logs</p>
+
+    <div id="status" class="status offline">Checking backend...</div>
+
+    <div class="stats" id="stats">
+        <span class="stat">Entries: <strong id="entryCount">0</strong></span>
+        <span class="stat">Code Blocks: <strong id="codeCount">0</strong></span>
+        <span class="stat">Errors: <strong id="errorCount">0</strong></span>
+        <span class="stat">Success Rate: <strong id="successRate">0%</strong></span>
+    </div>
+
+    <div class="grid">
+        <!-- Upload -->
+        <div class="card">
+            <h3>Upload Logs</h3>
+            <div class="file-drop" id="dropzone">
+                <div class="icon">📁</div>
+                <div>Drop logs or click to browse</div>
+                <div class="hint">.txt, .log, .json — any chat/terminal transcript</div>
+                <input type="file" id="fileInput" multiple accept=".txt,.log,.json">
+            </div>
+            <div class="upload-list" id="uploadList"></div>
+            <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn btn-secondary" onclick="clearCompleted()">Clear Completed</button>
+                <button class="btn btn-secondary" onclick="loadPatterns()">Show Patterns</button>
+            </div>
+        </div>
+
+        <!-- Query -->
+        <div class="card">
+            <h3>Search Logs</h3>
+            <div class="query-row">
+                <input type="text" id="queryInput" placeholder="Find code that fixed error, command that worked, etc..." onkeydown="if(event.key==='Enter')searchLogs()">
+                <button class="btn btn-primary" onclick="searchLogs()">Search</button>
+            </div>
+            <div class="suggested">
+                <button onclick="setQuery('working code that fixed error')">Working fixes</button>
+                <button onclick="setQuery('command that succeeded')">Working commands</button>
+                <button onclick="setQuery('failed and then succeeded')">Fix patterns</button>
+                <button onclick="setQuery('error repeated multiple times')">Repeated errors</button>
+                <button onclick="setQuery('code block with bash')">Bash code</button>
+            </div>
+            <div id="ragResults"></div>
+        </div>
+
+        <!-- Patterns -->
+        <div class="card" style="grid-column:1/3;">
+            <h3>Patterns and Insights</h3>
+            <div class="tabs">
+                <button class="active" onclick="switchTab('errors')">Repeated Errors</button>
+                <button onclick="switchTab('commands')">Common Commands</button>
+                <button onclick="switchTab('code')">Working Code</button>
+                <button onclick="switchTab('solutions')">Error to Solutions</button>
+            </div>
+            <div id="patternsContainer">
+                <div class="empty-state">Click "Show Patterns" or upload logs to see insights</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:5001';
+        let uploads = {};
+        let currentTab = 'errors';
+
+        function showToast(msg, isError) {
+            var t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show' + (isError ? ' error' : '');
+            clearTimeout(t._hide);
+            t._hide = setTimeout(function() { t.className = 'toast'; }, 4000);
+        }
+
+        function setQuery(q) { document.getElementById('queryInput').value = q; searchLogs(); }
+
+        function checkStatus() {
+            fetch(API_BASE)
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    document.getElementById('status').className = 'status online';
+                    document.getElementById('status').textContent = 'Online — ' + data.documents + ' entries indexed';
+                    return fetch(API_BASE + '/rag/stats');
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(stats) {
+                    document.getElementById('entryCount').textContent = stats.total_entries || 0;
+                    document.getElementById('codeCount').textContent = stats.code_blocks || 0;
+                    document.getElementById('errorCount').textContent = stats.errors || 0;
+                    document.getElementById('successRate').textContent = (stats.success_rate || 0) + '%';
+                })
+                ['catch'](function(e) {
+                    document.getElementById('status').className = 'status offline';
+                    document.getElementById('status').textContent = 'Backend Offline';
+                });
+        }
+
+        function uploadFiles(files) {
+            for (var fi = 0; fi < files.length; fi++) {
+                var file = files[fi];
+                var id = file.name + '_' + Date.now();
+                uploads[id] = { name: file.name, status: 'pending', progress: 0, size: file.size };
+                renderUploads();
+                var formData = new FormData();
+                formData.append('file', file);
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', API_BASE + '/scan');
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        uploads[id].progress = Math.round((e.loaded / e.total) * 100);
+                        uploads[id].status = 'processing';
+                        renderUploads();
+                    }
+                };
+                xhr.onload = function() {
+                    if (xhr.status === 200) {
+                        var data = JSON.parse(xhr.responseText);
+                        uploads[id].status = 'complete';
+                        uploads[id].progress = 100;
+                        uploads[id].result = data;
+                        showToast('Completed: ' + file.name + ' — ' + data.code_blocks + ' code blocks, ' + data.errors + ' errors', false);
+                        checkStatus();
+                        loadPatterns();
+                    } else {
+                        uploads[id].status = 'failed';
+                        showToast('Failed: ' + file.name, true);
+                    }
+                    renderUploads();
+                };
+                xhr.onerror = function() {
+                    uploads[id].status = 'failed';
+                    renderUploads();
+                    showToast('Network error: ' + file.name, true);
+                };
+                xhr.send(formData);
+            }
+        }
+
+        function renderUploads() {
+            var list = document.getElementById('uploadList');
+            var keys = Object.keys(uploads);
+            if (keys.length === 0) { list.innerHTML = '<div class="empty-state">No uploads yet</div>'; return; }
+            var html = '';
+            for (var i = 0; i < keys.length; i++) {
+                var u = uploads[keys[i]];
+                var badge = '';
+                if (u.result) { badge = '<span class="badge-code">' + u.result.code_blocks + ' blocks ' + u.result.errors + ' errors</span>'; }
+                html += '<div class="upload-item">' +
+                    '<span class="name">' + u.name + '</span>' +
+                    '<div class="progress-bar"><div class="fill" style="width:' + (u.progress||0) + '%"></div></div>' +
+                    '<span class="status-badge ' + u.status + '">' + (u.status === 'processing' ? u.progress + '%' : u.status) + '</span>' +
+                    badge +
+                    '</div>';
+            }
+            list.innerHTML = html;
+        }
+
+        function clearCompleted() {
+            var keys = Object.keys(uploads);
+            for (var i = 0; i < keys.length; i++) {
+                if (uploads[keys[i]].status === 'complete' || uploads[keys[i]].status === 'failed') {
+                    delete uploads[keys[i]];
+                }
+            }
+            renderUploads();
+        }
+
+        function searchLogs() {
+            var query = document.getElementById('queryInput').value.trim();
+            if (!query) { showToast('Enter a search query', true); return; }
+            var container = document.getElementById('ragResults');
+            container.innerHTML = '<div style="color:#888;">Searching...</div>';
+            fetch(API_BASE + '/rag/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: query, top_k: 10, threshold: 0.15 })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.results && data.results.length > 0) {
+                    var html = '';
+                    for (var i = 0; i < data.results.length; i++) {
+                        var r = data.results[i];
+                        var meta = r.metadata || {};
+                        html += '<div class="result-item">' +
+                            '<div class="meta">' +
+                            '<span>' + r.filename + '</span>' +
+                            '<span class="score">score: ' + (r.score||0).toFixed(3) + '</span>' +
+                            (meta.has_code ? '<span class="badge-code">code</span>' : '') +
+                            (meta.has_errors ? '<span class="badge-error">error</span>' : '') +
+                            (meta.success ? '<span class="badge-success">success</span>' : '') +
+                            '</div>' +
+                            '<div class="text">' + (r.text||'').replace(/</g, '&lt;') + '</div>' +
+                            '</div>';
+                    }
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">No results found</div>';
+                }
+            })
+            ['catch'](function(e) {
+                container.innerHTML = '<div style="color:#ff6b35;">Error: ' + e.message + '</div>';
+            });
+        }
+
+        function loadPatterns() {
+            fetch(API_BASE + '/rag/patterns?limit=15')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    renderPatterns(data);
+                })
+                ['catch'](function(e) {
+                    document.getElementById('patternsContainer').innerHTML = '<div style="color:#ff6b35;">Error loading patterns</div>';
+                });
+        }
+
+        function renderPatterns(data) {
+            var container = document.getElementById('patternsContainer');
+            var html = '';
+            var i;
+
+            if (currentTab === 'errors') {
+                html = '<h4 style="color:#ff6b35;margin:0 0 10px 0;">Most Repeated Errors</h4>';
+                if (data.top_errors && data.top_errors.length > 0) {
+                    for (i = 0; i < data.top_errors.length; i++) {
+                        var e = data.top_errors[i];
+                        html += '<div class="pattern-card">' +
+                            '<div style="display:flex;justify-content:space-between;">' +
+                            '<span class="cmd">' + e.type + '</span>' +
+                            '<span class="count">x ' + e.count + (e.solved ? ' solved' : '') + '</span>' +
+                            '</div>' +
+                            '<div style="font-size:13px;color:#aaa;margin-top:4px;">' + e.text + '</div>' +
+                            '</div>';
+                    }
+                } else { html += '<div class="empty-state">No errors found yet</div>'; }
+            } else if (currentTab === 'commands') {
+                html = '<h4 style="color:#00d4ff;margin:0 0 10px 0;">Most Used Commands</h4>';
+                if (data.top_commands && data.top_commands.length > 0) {
+                    for (i = 0; i < data.top_commands.length; i++) {
+                        var c = data.top_commands[i];
+                        html += '<div class="pattern-card">' +
+                            '<div style="display:flex;justify-content:space-between;">' +
+                            '<span class="cmd">' + c.command + '</span>' +
+                            '<span class="count">x ' + c.count + (c.worked ? ' worked' : '') + '</span>' +
+                            '</div>' +
+                            '</div>';
+                    }
+                } else { html += '<div class="empty-state">No commands found</div>'; }
+            } else if (currentTab === 'code') {
+                html = '<h4 style="color:#00d4ff;margin:0 0 10px 0;">Working Code Snippets</h4>';
+                if (data.working_code && data.working_code.length > 0) {
+                    for (i = 0; i < data.working_code.length; i++) {
+                        var cd = data.working_code[i];
+                        html += '<div class="pattern-card">' +
+                            '<div style="display:flex;justify-content:space-between;">' +
+                            '<span class="cmd">' + cd.language + '</span>' +
+                            '<span class="count">working</span>' +
+                            '</div>' +
+                            '<div class="code">' + cd.code + '</div>' +
+                            '</div>';
+                    }
+                } else { html += '<div class="empty-state">No working code found</div>'; }
+            } else if (currentTab === 'solutions') {
+                html = '<h4 style="color:#4caf50;margin:0 0 10px 0;">Error to Solution Pairs</h4>';
+                if (data.error_solutions && data.error_solutions.length > 0) {
+                    for (i = 0; i < data.error_solutions.length; i++) {
+                        var p = data.error_solutions[i];
+                        html += '<div class="pattern-card">' +
+                            '<div style="color:#ff6b35;">Error: ' + p.error + '</div>' +
+                            '<div style="color:#4caf50;margin-top:4px;">Solution: ' + p.solution + '</div>' +
+                            '</div>';
+                    }
+                } else { html += '<div class="empty-state">No error-solution pairs found</div>'; }
+            }
+            container.innerHTML = html;
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            var btns = document.querySelectorAll('.tabs button');
+            for (var i = 0; i < btns.length; i++) { btns[i].classList.remove('active'); }
+            var tabMap = { 'errors': 0, 'commands': 1, 'code': 2, 'solutions': 3 };
+            btns[tabMap[tab]].classList.add('active');
+            loadPatterns();
+        }
+
+        var dropzone = document.getElementById('dropzone');
+        var fileInput = document.getElementById('fileInput');
+        dropzone.addEventListener('click', function() { fileInput.click(); });
+        dropzone.addEventListener('dragover', function(e) { e.preventDefault(); dropzone.classList.add('dragover'); });
+        dropzone.addEventListener('dragleave', function() { dropzone.classList.remove('dragover'); });
+        dropzone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', function(e) {
+            if (e.target.files.length) uploadFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        checkStatus();
+        setInterval(checkStatus, 10000);
+    </script>
 </body>
 </html>
