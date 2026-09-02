@@ -180,3 +180,5 @@ For public use, deploy the Docker backend to a cloud host.
 ===============================================================================
 END OF README
 ===============================================================================
+
+This document is maintained as plain ASCII text. Last updated: September 2, 2026.
