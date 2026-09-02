@@ -144,19 +144,13 @@ and success rate. The command you used most often is likely the one that
 eventually worked.
 
 ===============================================================================
-LICENSE
+LIVE DEMO
 ===============================================================================
 
-This project is provided as-is for internal use. Feel free to modify and
-extend for your own needs.
+The system is deployed at:
+https://swipswaps.github.io/receipts-ocr-rag
 
-===============================================================================
-CONTACT
-===============================================================================
-
-For questions or improvements, refer to the chat logs that generated this
-system. The entire development process is documented in the conversation
-that led to this system.
+It connects to your local backend running on port 5001.
 
 ===============================================================================
 END OF README
